@@ -1,0 +1,3 @@
+[submodule "Signal"]
+	path = Signal
+	url = https://github.com/zrvcec/Signal.git

@@ -1,6 +1,9 @@
 --!strict
 --!nolint LocalShadow
 
+-- Other dependencies
+local Signal = require("./././Signal/Signal")
+
 local TierShift = {}
 TierShift.__index = TierShift
 
@@ -11,12 +14,12 @@ function TierShift.new()
     self.initialized = false
 
     -- Events
-    self.OnReset = nil
-    self.OnUpgrade = nil
-    self.OnDownGrade = nil
-    self.OnUpdate = nil
-    self.OnAdded = nil
-    self.OnRemoved = nil
+    self.OnReset = Signal.new()
+    self.OnUpgrade = Signal.new()
+    self.OnDownGrade = Signal.new()
+    self.OnUpdate = Signal.new()
+    self.OnAdded = Signal.new()
+    self.OnRemoved = Signal.new()
     
     -- Config
     self._CanUpgrade = false
@@ -29,13 +32,14 @@ function TierShift.new()
     -- DATA
     self.UsedPoints = 0
     self.AvailablePoints = 0
-    self._table = {} :: Expectedtable
-
+    self._table = {} :: ExpectedTable
+    self._raw = {} :: ExpectedTableRaw
     return self
 end
 
 type TierShift = typeof(TierShift.new())
-type Expectedtable = {[string]: {min:number, max:number, curr:number}}
+type ExpectedTable = {[string]: {min:number, max:number, curr:number}}
+type ExpectedTableRaw = {[string]: number}
 
 function TierShift:init(CanUpgrade:boolean?, CanDowngrade:boolean?, CanReset:boolean?, MaxPointsForUpgrade:number?, MaxPointsForDownGrade:number?)
     local self = self :: TierShift
@@ -79,6 +83,9 @@ function TierShift:Add(string:string, CurrentValueOr0:number?, min:number, max:n
     assert(CurrentValueOr0 >= min and CurrentValueOr0 <= max, "Initial value must be within the allowed range!")
 
     self._table[string] = {min = min, max = max, curr = CurrentValueOr0 or min}
+    self._raw[string] = self._table[string].curr
+
+    self.OnAdded:Fire(string, (CurrentValueOr0 or min))
     return true
 end
 
@@ -89,10 +96,14 @@ function TierShift:Remove(string:string)
     assert(typeof(string) == "string", "Passed in argument has to be a string!")
     
     self._table[string] = nil
+    self._raw[string] = nil
+
+    self.OnRemoved:Fire(string)
 
     return true
 end
 
+-- Generally recommended to put in short strings starting from AAA and ends to ZZZ and have processors handle them on initialization
 function TierShift:Upgrade(id:string, value: number): boolean
         local self = self :: TierShift
         assert(self.initialized == true, "TierShift is not initialized.")
@@ -100,13 +111,13 @@ function TierShift:Upgrade(id:string, value: number): boolean
         assert(value > 0, "Upgrade value must be bigger than 0!")
         assert(typeof(id) == "string", "Passed in argument has to be a string!")
         assert(self._table[id] ~= nil, "Could not find identifier to upgrade")
+        assert(self._raw[id] ~= nil, "raw table does not exist!")
 
         if self._CanUpgrade == false then
             return false
         end
         
         local handle = self._table[id]
-
         if self._MaxPointsForUpgrade then
             if value > self._MaxPointsForUpgrade then
                 return false
@@ -122,7 +133,11 @@ function TierShift:Upgrade(id:string, value: number): boolean
         end
 
         handle.curr += value
+        self._raw[id] = handle.curr
+
         self.UsedPoints += value
+        
+        self.OnUpgrade:Fire(id, handle.curr)
         return true
 end
 
@@ -132,6 +147,7 @@ function TierShift:DownGrade(id:string, value:number): boolean
         assert(typeof(value) == "number", "Upgrade value must be a number!")
         assert(value > 0, "Upgrade value must be bigger than 0!")
         assert(typeof(id) == "string", "Passed in argument has to be a string!")
+        assert(self._raw[id] ~= nil, "raw table does not exist!")
         assert(self._table[id] ~= nil, "Could not find identifier to upgrade")
 
         if self._CanDownGrade == false then
@@ -155,21 +171,34 @@ function TierShift:DownGrade(id:string, value:number): boolean
         end
         
         handle.curr -= value
-        self.UsedPoints -= value
+        self._raw[id] = handle.curr
 
+        self.UsedPoints -= value
+        
+        self.OnDownGrade:Fire(id, handle.curr)
         return true
 end
 
 function TierShift:Reset()
-        local self = self :: TierShift
-        assert(self.initialized == true, "TierShift is not initialized.")
-        assert(self._CanReset == true, "TierShift Cannot reset this version!")
-        
-        self.UsedPoints = 0
+    local self = self :: TierShift
+    assert(self.initialized == true, "TierShift is not initialized.")
+    assert(self._CanReset == true, "TierShift Cannot reset this version!")
+    self.UsedPoints = 0
 
-        for i, v in pairs(self._table) do
-            v.curr = v.min
-        end
+    for i, v in pairs(self._table) do
+        v.curr = v.min or 0
+        self._raw[i] = v.curr
+
+        self.OnReset:Fire(i, v.curr)
+    end
+
+    return true
+end
+
+-- Only call once, store into datastore table and everytime an event fires call safe flag or auto save when changes detected
+function TierShift:GetDataStoreDataReference()
+    local self = self :: TierShift
+    return self._raw
 end
 
 return TierShift
